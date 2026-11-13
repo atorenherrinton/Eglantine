@@ -94,7 +94,8 @@ private:
 
     Common::ParamPackage BuildParamPackageForAnalog(PadIdentifier identifier, int axis_x,
                                                     int axis_y, float offset_x,
-                                                    float offset_y) const;
+                                                    float offset_y, bool invert_x,
+                                                    bool invert_y) const;
 
     /// Returns the default button bindings list
     ButtonBindings GetDefaultButtonBinding(const std::shared_ptr<SDLJoystick>& joystick) const;
