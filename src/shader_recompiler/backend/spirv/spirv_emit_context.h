@@ -382,6 +382,7 @@ public:
     Id mesh_payload_u32{};  ///< pointer type to one payload word
     Id mesh_attributes{};
     Id mesh_map{};
+    Id mesh_store_func{}; ///< writes an attribute word to its output (mesh_outputs_in_workgroup_memory)
     Id mesh_primitive_count{};
     Id mesh_shared_u32{};   ///< pointer type to one workgroup word
     Id mesh_primitive_indices{};
@@ -436,6 +437,7 @@ private:
     void DefineInputs(const IR::Program& program);
     void DefineOutputs(const IR::Program& program);
     void DefineMesh(const IR::Program& program);
+    void DefineMeshDirectStore();
 };
 
 } // namespace Shader::Backend::SPIRV

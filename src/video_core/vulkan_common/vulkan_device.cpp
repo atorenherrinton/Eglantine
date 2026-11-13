@@ -672,6 +672,12 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
             (std::min)(properties.properties.limits.maxVertexInputAttributes, 16U);
         properties.properties.limits.maxVertexInputBindings =
             (std::min)(properties.properties.limits.maxVertexInputBindings, 16U);
+        // MoltenVK only uses Metal argument buffers for non-push descriptor sets. Push sets are
+        // bound as discrete Metal resources, so large guest stages exceed Metal's 31 buffer /
+        // 16 sampler slots and fail to compile (missing draws, e.g. mesh-shaded foliage).
+        if (extensions.push_descriptor) {
+            RemoveExtension(extensions.push_descriptor, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        }
     }
 
     if (is_turnip || is_qualcomm) {
