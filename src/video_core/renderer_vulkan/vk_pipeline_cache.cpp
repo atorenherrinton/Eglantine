@@ -3618,10 +3618,20 @@ vk::PipelineCache PipelineCache::LoadVulkanPipelineCache(const std::filesystem::
         std::vector<char> cache_data(cache_size);
         file.read(cache_data.data(), cache_size);
 
-        LOG_INFO(Render_Vulkan,
-                 "Loaded Vulkan driver pipeline cache: ", Common::FS::PathToUTF8String(filename));
-
-        return create_pipeline_cache(cache_size, cache_data.data());
+        file.close();
+        try {
+            auto cache = create_pipeline_cache(cache_size, cache_data.data());
+            LOG_INFO(Render_Vulkan, "Loaded Vulkan driver pipeline cache: {}",
+                     Common::FS::PathToUTF8String(filename));
+            return cache;
+        } catch (const vk::Exception& e) {
+            // The driver may refuse data written by another driver version or configuration
+            // (MoltenVK does when its settings change); start over instead of aborting.
+            LOG_WARNING(Render_Vulkan, "Driver rejected the Vulkan pipeline cache ({}), deleting it",
+                        e.what());
+            Common::FS::RemoveFile(filename);
+            return create_pipeline_cache(0, nullptr);
+        }
 
     } catch (const std::ios_base::failure& e) {
         LOG_ERROR(Common_Filesystem, "{}", e.what());
