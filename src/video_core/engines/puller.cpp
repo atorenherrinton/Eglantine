@@ -351,9 +351,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (met_no_drain && op == GpuSemaphoreOperation::AcquireGequal &&
             VideoCommon::GpuSplit::Get().Active() &&
             acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
-            // What the front fetches next still waits for the work sent before the acquire where
-            // it depends on it (command lists on draw-written pages).
-            VideoCommon::GpuSplit::Get().NoteSync();
+            // Nothing waited, so nothing is ordered before what the front fetches next.
             return;
         }
         DrainBack(VideoCommon::DrainSite::AcquireTrigger);
