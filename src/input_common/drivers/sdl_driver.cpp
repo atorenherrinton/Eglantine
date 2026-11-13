@@ -75,6 +75,14 @@ SDL_GamepadBinding GetBindingForAxis(const GamepadBindings& bindings, SDL_Gamepa
                current.output.axis.axis == static_cast<SDL_GamepadAxis>(axis);
     });
 }
+
+// Mappings such as "lefty:a1~" (macOS GameController devices, GameCube adapters) point a stick at a
+// joystick axis that runs the opposite way. Sticks read the joystick axis directly, so the binding's
+// direction has to be carried over or the stick ends up reversed.
+bool IsAxisBindingReversed(const SDL_GamepadBinding& binding) {
+    return binding.input_type == SDL_GAMEPAD_BINDTYPE_AXIS &&
+           binding.input.axis.axis_min > binding.input.axis.axis_max;
+}
 } // Anonymous namespace
 
 static bool SDLEventWatcher(void* user_data, SDL_Event* event) {
@@ -918,7 +926,8 @@ Common::ParamPackage SDLDriver::BuildParamPackageForBinding(
 
 Common::ParamPackage SDLDriver::BuildParamPackageForAnalog(PadIdentifier identifier, int axis_x,
                                                            int axis_y, float offset_x,
-                                                           float offset_y) const {
+                                                           float offset_y, bool invert_x,
+                                                           bool invert_y) const {
     Common::ParamPackage params;
     params.Set("engine", GetEngineName());
     params.Set("port", static_cast<int>(identifier.port));
@@ -927,8 +936,8 @@ Common::ParamPackage SDLDriver::BuildParamPackageForAnalog(PadIdentifier identif
     params.Set("axis_y", axis_y);
     params.Set("offset_x", offset_x);
     params.Set("offset_y", offset_y);
-    params.Set("invert_x", "+");
-    params.Set("invert_y", "+");
+    params.Set("invert_x", invert_x ? "-" : "+");
+    params.Set("invert_y", invert_y ? "-" : "+");
     return params;
 }
 
@@ -1121,7 +1130,9 @@ AnalogMapping SDLDriver::GetAnalogMappingForDevice(const Common::ParamPackage& p
         mapping.insert_or_assign(Settings::NativeAnalog::LStick,
                      BuildParamPackageForAnalog(identifier, binding_left_x.input.axis.axis,
                                     binding_left_y.input.axis.axis,
-                                                            left_offset_x, left_offset_y));
+                                                            left_offset_x, left_offset_y,
+                                                            IsAxisBindingReversed(binding_left_x),
+                                                            IsAxisBindingReversed(binding_left_y)));
     } else {
         const auto identifier = joystick->GetPadIdentifier();
         PreSetController(identifier);
@@ -1132,7 +1143,9 @@ AnalogMapping SDLDriver::GetAnalogMappingForDevice(const Common::ParamPackage& p
         mapping.insert_or_assign(Settings::NativeAnalog::LStick,
                      BuildParamPackageForAnalog(identifier, binding_left_x.input.axis.axis,
                                     binding_left_y.input.axis.axis,
-                                                            left_offset_x, left_offset_y));
+                                                            left_offset_x, left_offset_y,
+                                                            IsAxisBindingReversed(binding_left_x),
+                                                            IsAxisBindingReversed(binding_left_y)));
     }
     const auto binding_right_x = GetBindingForAxis(bindings, SDL_GAMEPAD_AXIS_RIGHTX);
     const auto binding_right_y = GetBindingForAxis(bindings, SDL_GAMEPAD_AXIS_RIGHTY);
@@ -1145,7 +1158,9 @@ AnalogMapping SDLDriver::GetAnalogMappingForDevice(const Common::ParamPackage& p
     mapping.insert_or_assign(Settings::NativeAnalog::RStick,
                              BuildParamPackageForAnalog(identifier, binding_right_x.input.axis.axis,
                                                         binding_right_y.input.axis.axis, right_offset_x,
-                                                        right_offset_y));
+                                                        right_offset_y,
+                                                        IsAxisBindingReversed(binding_right_x),
+                                                        IsAxisBindingReversed(binding_right_y)));
     return mapping;
 }
 
