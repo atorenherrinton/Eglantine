@@ -11,6 +11,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QTimer>
 #include "common/assert.h"
 #include "common/param_package.h"
@@ -360,6 +361,8 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
     analog_map_modifier_slider = {ui->sliderLStickModifierRange, ui->sliderRStickModifierRange};
     analog_map_range_groupbox = {ui->buttonLStickRangeGroup, ui->buttonRStickRangeGroup};
     analog_map_range_spinbox = {ui->spinboxLStickRange, ui->spinboxRStickRange};
+    analog_map_invert_x_checkbox = {ui->checkboxLStickInvertX, ui->checkboxRStickInvertX};
+    analog_map_invert_y_checkbox = {ui->checkboxLStickInvertY, ui->checkboxRStickInvertY};
 
     ui->controllerFrame->SetController(emulated_controller);
 
@@ -637,6 +640,12 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
                                 analog_map_buttons[analog_id][analog_sub_button_id]->setText(
                                     AnalogToText(param, analog_sub_buttons[analog_sub_button_id]));
                             }
+                            for (auto [checkbox, key] :
+                                 {std::pair{analog_map_invert_x_checkbox[analog_id], "invert_x"},
+                                  std::pair{analog_map_invert_y_checkbox[analog_id], "invert_y"}}) {
+                                const QSignalBlocker blocker(checkbox);
+                                checkbox->setChecked(param.Get(key, "+") == "-");
+                            }
                         });
                         context_menu.exec(analog_map_buttons[analog_id][sub_button_id]->mapToGlobal(
                             menu_location));
@@ -696,6 +705,21 @@ ConfigureInputPlayer::ConfigureInputPlayer(QWidget* parent, std::size_t player_i
                     param.Set("range", spinbox_value / 100.0f);
                     emulated_controller->SetStickParam(analog_id, param);
                 });
+
+        const auto connect_invert = [=, this](QCheckBox* checkbox, const char* key) {
+            connect(checkbox, &QCheckBox::toggled, [=, this](bool checked) {
+                Common::ParamPackage param = emulated_controller->GetStickParam(analog_id);
+                param.Set(key, checked ? "-" : "+");
+                emulated_controller->SetStickParam(analog_id, param);
+                for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM;
+                     ++sub_button_id) {
+                    analog_map_buttons[analog_id][sub_button_id]->setText(
+                        AnalogToText(param, analog_sub_buttons[sub_button_id]));
+                }
+            });
+        };
+        connect_invert(analog_map_invert_x_checkbox[analog_id], "invert_x");
+        connect_invert(analog_map_invert_y_checkbox[analog_id], "invert_y");
 
         connect(analog_map_deadzone_slider[analog_id], &QSlider::valueChanged, [=, this] {
             Common::ParamPackage param = emulated_controller->GetStickParam(analog_id);
@@ -1072,6 +1096,15 @@ void ConfigureInputPlayer::UpdateUI() {
             slider_value = static_cast<int>(param.Get("modifier_scale", 0.5f) * 100);
             modifier_label->setText(tr("Modifier Range: %1%").arg(slider_value));
             modifier_slider->setValue(slider_value);
+        }
+
+        // Sticks bound to a single analog input (any controller engine) can be reversed per axis.
+        const bool is_axis_stick = param.Has("axis_x") && param.Has("axis_y");
+        for (auto [checkbox, key] : {std::pair{analog_map_invert_x_checkbox[analog_id], "invert_x"},
+                                     std::pair{analog_map_invert_y_checkbox[analog_id], "invert_y"}}) {
+            const QSignalBlocker blocker(checkbox);
+            checkbox->setChecked(param.Get(key, "+") == "-");
+            checkbox->setVisible(is_axis_stick);
         }
 
         deadzone_label->setVisible(is_controller);

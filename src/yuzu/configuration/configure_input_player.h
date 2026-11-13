@@ -209,6 +209,8 @@ private:
     std::array<QSlider*, Settings::NativeAnalog::NumAnalogs> analog_map_modifier_slider;
     std::array<QGroupBox*, Settings::NativeAnalog::NumAnalogs> analog_map_range_groupbox;
     std::array<QSpinBox*, Settings::NativeAnalog::NumAnalogs> analog_map_range_spinbox;
+    std::array<QCheckBox*, Settings::NativeAnalog::NumAnalogs> analog_map_invert_x_checkbox;
+    std::array<QCheckBox*, Settings::NativeAnalog::NumAnalogs> analog_map_invert_y_checkbox;
 
     static const std::array<std::string, ANALOG_SUB_BUTTONS_NUM> analog_sub_buttons;
 
