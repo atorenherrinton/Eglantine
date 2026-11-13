@@ -715,6 +715,24 @@
                  </widget>
                 </item>
                 <item>
+                 <layout class="QHBoxLayout" name="checkboxLStickInvertHorizontalLayout">
+                  <item>
+                   <widget class="QCheckBox" name="checkboxLStickInvertY">
+                    <property name="text">
+                     <string>Invert up/down</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QCheckBox" name="checkboxLStickInvertX">
+                    <property name="text">
+                     <string>Invert left/right</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item>
                  <layout class="QHBoxLayout" name="sliderLStickModifierRangeHorizontalLayout">
                   <item>
                    <widget class="QLabel" name="labelLStickModifierRange">
@@ -2787,6 +2805,24 @@
                    <enum>Qt::Orientation::Horizontal</enum>
                   </property>
                  </widget>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="checkboxRStickInvertHorizontalLayout">
+                  <item>
+                   <widget class="QCheckBox" name="checkboxRStickInvertY">
+                    <property name="text">
+                     <string>Invert up/down</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QCheckBox" name="checkboxRStickInvertX">
+                    <property name="text">
+                     <string>Invert left/right</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
                 </item>
                 <item>
                  <layout class="QHBoxLayout" name="sliderRStickModifierRangeHorizontalLayout">
