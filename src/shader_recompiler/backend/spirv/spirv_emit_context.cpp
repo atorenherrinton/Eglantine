@@ -1908,9 +1908,11 @@ void EmitContext::DefineMesh(const IR::Program& program) {
         1U);
     mesh_map_bytes = 4 + mesh_info.PrimitiveVertices() * mesh_info.max_primitives;
     mesh_shared_u32 = TypePointer(spv::StorageClass::Workgroup, U32[1]);
-    mesh_attributes = DefineVariable(*this, TypeArray(U32[1], Const(mesh_attribute_words)),
-                                     std::nullopt, spv::StorageClass::Workgroup);
-    Name(mesh_attributes, "isbe_attributes");
+    if (!profile.mesh_outputs_in_workgroup_memory) {
+        mesh_attributes = DefineVariable(*this, TypeArray(U32[1], Const(mesh_attribute_words)),
+                                         std::nullopt, spv::StorageClass::Workgroup);
+        Name(mesh_attributes, "isbe_attributes");
+    }
     mesh_map = DefineVariable(*this, TypeArray(U32[1], Const(mesh_map_bytes)), std::nullopt,
                               spv::StorageClass::Workgroup);
     Name(mesh_map, "isbe_map");
@@ -2001,6 +2003,81 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     for (const u32 line : mesh_info.primitive_lines) {
         mesh_primitive_targets.push_back(target(line, true));
     }
+    if (profile.mesh_outputs_in_workgroup_memory) {
+        DefineMeshDirectStore();
+    }
+}
+
+// The attribute region costs workgroup memory on top of the outputs where the driver keeps those
+// in workgroup memory too (Metal caps both together at 32 KiB). There every attribute word is
+// decoded to its line and element and stored to the output right away.
+void EmitContext::DefineMeshDirectStore() {
+    const u32 vertex_lines{static_cast<u32>(mesh_info.vertex_lines.size())};
+    const u32 primitive_lines{static_cast<u32>(mesh_info.primitive_lines.size())};
+    const Id func_type{TypeFunction(void_id, U32[1], U32[1])};
+    mesh_store_func = OpFunction(void_id, spv::FunctionControlMask::MaskNone, func_type);
+    Name(mesh_store_func, "isbe_store");
+    const Id index{OpFunctionParameter(U32[1])};
+    const Id value{OpFunctionParameter(U32[1])};
+    AddLabel();
+    // Word = region base + group * lines * 32 + line * 32 + element % 32.
+    const Id is_primitive{OpUGreaterThanEqual(U1, index, Const(mesh_primitive_base))};
+    const Id local{OpSelect(U32[1], is_primitive, OpISub(U32[1], index, Const(mesh_primitive_base)),
+                            index)};
+    const Id group_words{OpSelect(U32[1], is_primitive,
+                                  Const((std::max)(primitive_lines, 1U) * 32),
+                                  Const((std::max)(vertex_lines, 1U) * 32))};
+    const Id group{OpUDiv(U32[1], local, group_words)};
+    const Id rest{OpISub(U32[1], local, OpIMul(U32[1], group, group_words))};
+    const Id line{OpShiftRightLogical(U32[1], rest, Const(5U))};
+    const Id element{OpIAdd(U32[1], OpShiftLeftLogical(U32[1], group, Const(5U)),
+                            OpBitwiseAnd(U32[1], rest, Const(31U)))};
+    const Id selector{
+        OpSelect(U32[1], is_primitive, OpIAdd(U32[1], line, Const(vertex_lines)), line)};
+
+    struct Case {
+        const MeshLineTarget* target;
+        u32 limit;
+    };
+    std::vector<Sirit::Literal> literals;
+    std::vector<Id> labels;
+    std::vector<Case> cases;
+    const auto add = [&](const std::vector<MeshLineTarget>& targets, u32 first, u32 limit) {
+        for (u32 i = 0; i < targets.size(); ++i) {
+            if (Sirit::ValidId(targets[i].variable)) {
+                literals.push_back(first + i);
+                labels.push_back(OpLabel());
+                cases.push_back({&targets[i], limit});
+            }
+        }
+    };
+    add(mesh_vertex_targets, 0, mesh_info.max_vertices);
+    add(mesh_primitive_targets, vertex_lines, mesh_info.max_primitives);
+    const Id merge{OpLabel()};
+    OpSelectionMerge(merge, spv::SelectionControlMask::MaskNone);
+    OpSwitch(selector, merge, literals, labels);
+    for (size_t i = 0; i < cases.size(); ++i) {
+        AddLabel(labels[i]);
+        const MeshLineTarget& target{*cases[i].target};
+        const Id in_range{OpULessThan(U1, element, Const(cases[i].limit))};
+        const Id store_label{OpLabel()};
+        const Id done_label{OpLabel()};
+        OpSelectionMerge(done_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(in_range, store_label, done_label);
+        AddLabel(store_label);
+        const Id pointer_type{target.is_float ? output_f32 : output_u32};
+        const Id pointer{target.element == ~0U
+                             ? OpAccessChain(pointer_type, target.variable, element)
+                             : OpAccessChain(pointer_type, target.variable, element,
+                                             Const(target.element))};
+        OpStore(pointer, target.is_float ? OpBitcast(F32[1], value) : value);
+        OpBranch(done_label);
+        AddLabel(done_label);
+        OpBranch(merge);
+    }
+    AddLabel(merge);
+    OpReturn();
+    OpFunctionEnd();
 }
 
 void EmitContext::DefineMeshEmulationOutput() {

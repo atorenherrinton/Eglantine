@@ -90,6 +90,18 @@ void ConvertDepth(EmitContext& ctx, Id vertex) {
     if (z_line == lines.end() || w_line == lines.end()) {
         return;
     }
+    if (Sirit::ValidId(ctx.mesh_store_func)) {
+        // The position was stored to the output directly.
+        const auto component = [&](u32 element) {
+            return ctx.OpLoad(ctx.F32[1], ctx.OpAccessChain(ctx.output_f32, ctx.output_position,
+                                                            vertex, ctx.Const(element)));
+        };
+        const Id z{ctx.OpFMul(ctx.F32[1], ctx.OpFAdd(ctx.F32[1], component(2U), component(3U)),
+                              ctx.Const(0.5f))};
+        ctx.OpStore(ctx.OpAccessChain(ctx.output_f32, ctx.output_position, vertex, ctx.Const(2U)),
+                    z);
+        return;
+    }
     const u32 num_lines{static_cast<u32>(lines.size())};
     const Id group{ctx.OpShiftRightLogical(ctx.U32[1], vertex, ctx.Const(5U))};
     const Id slot{ctx.OpBitwiseAnd(ctx.U32[1], vertex, ctx.Const(31U))};
@@ -261,7 +273,9 @@ void MeshEpilogue(EmitContext& ctx) {
                 ctx.OpStore(ctx.OpAccessChain(ctx.output_f32, ctx.mesh_point_size, vertex),
                             point_size);
             }
-            CopyLines(ctx, vertex, 0, vertex_lines, ctx.mesh_vertex_targets);
+            if (!Sirit::ValidId(ctx.mesh_store_func)) {
+                CopyLines(ctx, vertex, 0, vertex_lines, ctx.mesh_vertex_targets);
+            }
             if (convert_depth) {
                 ConvertDepth(ctx, vertex);
             }
@@ -294,8 +308,10 @@ void MeshEpilogue(EmitContext& ctx) {
                             : ctx.OpCompositeConstruct(
                                   index_type,
                                   std::span<const Id>(indices.data(), primitive_vertices)));
-            CopyLines(ctx, primitive, ctx.mesh_primitive_base, primitive_lines,
-                      ctx.mesh_primitive_targets);
+            if (!Sirit::ValidId(ctx.mesh_store_func)) {
+                CopyLines(ctx, primitive, ctx.mesh_primitive_base, primitive_lines,
+                          ctx.mesh_primitive_targets);
+            }
         });
     }
 }
@@ -321,6 +337,10 @@ void EmitIsbeWriteAttribute(EmitContext& ctx, Id address, Id value) {
     const Id index{ctx.OpShiftRightLogical(ctx.U32[1], address, ctx.Const(2U))};
     if (ctx.stage == Stage::Task) {
         ctx.OpStore(PayloadWord(ctx, index), value);
+        return;
+    }
+    if (Sirit::ValidId(ctx.mesh_store_func)) {
+        ctx.OpFunctionCall(ctx.void_id, ctx.mesh_store_func, index, value);
         return;
     }
     ctx.OpStore(SharedWord(ctx, ctx.mesh_attributes, Clamped(ctx, index, ctx.mesh_attribute_words)),
