@@ -1,0 +1,3 @@
+2026-11-13 10:35:11,038 - aqt.helper - DEBUG - helper 8650899136 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/mac_x64/desktop/qt6_6113/qt6_6113/Updates.xml.sha256
+2026-11-13 10:35:12,797 - aqt.helper - DEBUG - helper 8650899136 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/mac_x64/extensions/qtpdf/6113/clang_64/Updates.xml.sha256
+2026-11-13 10:35:14,510 - aqt.helper - DEBUG - helper 8650899136 Attempt to download checksum at https://download.qt.io/online/qtsdkrepository/mac_x64/extensions/qtwebengine/6113/clang_64/Updates.xml.sha256
