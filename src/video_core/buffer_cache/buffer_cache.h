@@ -2575,6 +2575,22 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             if (begin >= end) {
                 continue;
             }
+            if (const auto mesh = nx2_mesh_pages.find(page); mesh != nx2_mesh_pages.end()) {
+                {
+                    std::scoped_lock lock{nx2_list_mutex};
+                    mesh->second.writes = nx2_list_pages[page].writes;
+                }
+                mesh->second.ready.reset();
+                Nx2ExpandMeshPage(buffer, page, mesh->second);
+            }
+            {
+                // Pages whose lists the host GPU reads itself (mesh draw records) need no copy
+                // for the front, nor the submit that follows one.
+                std::scoped_lock lock{nx2_list_mutex};
+                if (!nx2_list_pages[page].front_reads) {
+                    continue;
+                }
+            }
             Nx2Staging staging = runtime.DownloadStagingBuffer(page_size, true);
             const BufferCopy copy{
                 .src_offset = buffer.Offset(begin),
@@ -2584,14 +2600,6 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             buffer.MarkUsage(copy.src_offset, copy.size);
             runtime.CopyBuffer(staging.buffer, buffer, std::span{&copy, 1}, true);
             recorded = true;
-            if (const auto mesh = nx2_mesh_pages.find(page); mesh != nx2_mesh_pages.end()) {
-                {
-                    std::scoped_lock lock{nx2_list_mutex};
-                    mesh->second.writes = nx2_list_pages[page].writes;
-                }
-                mesh->second.ready.reset();
-                Nx2ExpandMeshPage(buffer, page, mesh->second);
-            }
             std::scoped_lock lock{nx2_list_mutex};
             Nx2ListPage& entry = nx2_list_pages[page];
             if (entry.copy) {
@@ -2723,8 +2731,10 @@ auto BufferCache<P>::Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool 
             std::scoped_lock lock{nx2_list_mutex};
             const auto it = nx2_list_pages.find(page);
             if (it == nx2_list_pages.end()) {
+                nx2_list_pages[page].front_reads = true;
                 return Nx2ListRead::Unknown;
             }
+            it->second.front_reads = true;
             const Nx2ListPage& entry = it->second;
             if (entry.draw_written) {
                 // EDEN_NX2_CMDPAGE_DRAIN=1: drain and flush for every list on such pages.

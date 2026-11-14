@@ -1039,6 +1039,9 @@ private:
         /// the page's lists read guest memory once the back ran the work before the last such
         /// wait and no write came since the front flushed the page (Nx2ReadListCopy).
         bool draw_written{};
+        /// The split's front has read a list on this page (Nx2ReadListCopy): keep a copy of it
+        /// for the front after each GPU write. Pages only the host GPU reads (GPU records) don't.
+        bool front_reads{};
         std::optional<Nx2Staging> copy;
     };
     std::mutex nx2_list_mutex; ///< nx2_list_pages: the split's front reads the copies
