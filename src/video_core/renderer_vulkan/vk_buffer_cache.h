@@ -15,6 +15,7 @@
 #include "video_core/buffer_cache/usage_tracker.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
+#include "video_core/renderer_vulkan/vk_host_import.h"
 #include "video_core/renderer_vulkan/vk_multi_range_buffer.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
@@ -55,9 +56,7 @@ public:
         return buffer.Location();
     }
 
-    [[nodiscard]] bool IsRegionUsed(u64 offset, u64 size) const noexcept {
-        return tracker.IsUsed(offset, size);
-    }
+    [[nodiscard]] bool IsRegionUsed(u64 offset, u64 size) const noexcept;
 
     void MarkUsage(u64 offset, u64 size) noexcept;
 
@@ -138,6 +137,8 @@ public:
 
     u32 GetStorageBufferAlignment() const;
 
+    u64 GetMaxStorageBufferRange() const;
+
     [[nodiscard]] StagingBufferRef UploadStagingBuffer(size_t size);
 
     [[nodiscard]] StagingBufferRef DownloadStagingBuffer(size_t size, bool deferred = false);
@@ -153,6 +154,12 @@ public:
                     bool can_reorder_upload = false);
 
     void PostCopyBarrier();
+
+    /// Mesh draw arguments (group counts x, 1, 1) the GPU fills in from guest records
+    /// (BufferCache::Nx2MeshTaskArguments): one per word of a guest page, Nx2MeshSlots pages.
+    static constexpr u64 Nx2MeshSlotBytes = 1024 * 12;
+    static constexpr u32 Nx2MeshSlots = 1024;
+    [[nodiscard]] VkBuffer Nx2MeshArguments();
 
     void ClearBuffer(VkBuffer dest_buffer, u32 offset, size_t size, u32 value);
 
@@ -188,6 +195,34 @@ public:
         };
         RebindStreamUniform(last_stream_uniform, size);
         return ref.mapped_span;
+    }
+
+    /// Whether EDEN_NX2_HOST_IMPORT is on when it is not set: the NVIDIA proprietary driver on
+    /// Linux, where importing the guest memory was measured (RADV refuses the memfd backing,
+    /// and Windows and macOS are not verified). The emulator copies instead if an import fails.
+    [[nodiscard]] bool HostImportByDefault() const noexcept {
+#if defined(__linux__) && !defined(__ANDROID__)
+        return device.IsExtExternalMemoryHost() &&
+               device.GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+#else
+        return false;
+#endif
+    }
+
+    /// Binds the guest's own memory at `host_ptr` as a uniform buffer, with no copy (the host GPU
+    /// reads the pages live). False when the memory cannot be imported or the offset does not
+    /// meet the uniform buffer alignment; the caller then copies as usual.
+    bool TryBindImportedUniformBuffer(const u8* host_ptr, u32 size) {
+        const u64 alignment = device.GetUniformBufferAlignment();
+        if (alignment > 1 && (reinterpret_cast<uintptr_t>(host_ptr) & 0xfff) % alignment != 0) {
+            return false;
+        }
+        HostImporter::Ref ref;
+        if (!host_importer.Get(host_ptr, size, ref)) {
+            return false;
+        }
+        guest_descriptor_queue.AddBuffer(ref.buffer, ref.address, ref.offset, size);
+        return true;
     }
 
     /// The allocation of the latest BindMappedUniformBuffer call.
@@ -290,12 +325,14 @@ private:
     MemoryAllocator& memory_allocator;
     Scheduler& scheduler;
     StagingBufferPool& staging_pool;
+    HostImporter host_importer{device};
     GuestDescriptorQueue& guest_descriptor_queue;
 
     std::shared_ptr<QuadArrayIndexBuffer> quad_array_index_buffer;
     std::shared_ptr<QuadStripIndexBuffer> quad_strip_index_buffer;
 
     vk::Buffer null_buffer;
+    vk::Buffer nx2_mesh_arguments;
 
     std::unique_ptr<Uint8Pass> uint8_pass;
     std::unique_ptr<VertexRepackPass> vertex_repack_pass;
@@ -311,6 +348,13 @@ private:
 
     bool limit_dynamic_storage_buffers = false;
     u32 max_dynamic_storage_buffers = (std::numeric_limits<u32>::max)();
+
+    /// The index buffer BindIndexBuffer recorded last, at scheduler recording epoch bound_index_epoch.
+    VkBuffer bound_index_buffer = VK_NULL_HANDLE;
+    VkDeviceSize bound_index_offset = 0;
+    VkIndexType bound_index_type = VK_INDEX_TYPE_UINT32;
+    u64 bound_index_epoch = 0;
+    bool bound_index_valid = false;
 };
 
 struct BufferCacheParams {

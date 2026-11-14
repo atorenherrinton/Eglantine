@@ -32,6 +32,10 @@ namespace Control {
 struct ChannelState;
 }
 
+namespace Engines {
+class Maxwell3D;
+}
+
 class GPU;
 class MemoryManager;
 
@@ -187,6 +191,8 @@ public:
     void BindRasterizer(VideoCore::RasterizerInterface* rasterizer);
 
 private:
+    static bool IsMemoryWriter(const Engines::EngineInterface& engine,
+                               Engines::EngineTypes type, u32 method);
     static constexpr u32 non_puller_methods = 0x40;
     static constexpr u32 max_subchannels = 8;
     bool Step();
@@ -199,6 +205,9 @@ private:
 
     void CallMethod(u32 argument);
     void CallMultiMethod(const u32* base_start, u32 num_methods);
+    bool FrontRun(std::span<const CommandHeader> commands, size_t word_offset, size_t& index);
+    void VerifyFrontRun(Engines::Maxwell3D& maxwell3d, std::span<const CommandHeader> commands,
+                        size_t word_offset, size_t& index);
     [[nodiscard]] bool WantsSegment() const;
     void ReportUnboundSubchannel();
     void WatchArgument(u32 method, u32 argument) const;
@@ -211,6 +220,9 @@ public:
     void RecordParsedEntry(const CommandListHeader& header, std::span<const CommandHeader> commands);
     /// Whether the entry lies on device pages the GPU has written (NX2).
     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
+    /// Whether the entry is a macro call's parameter record on GPU-written pages that the
+    /// split's back handles without the front reading it; fills `words` with placeholders.
+    bool TakeGpuRecord(const CommandListHeader& header, std::array<CommandHeader, 3>& words);
     /// Copies the list's words from memory again, as of suspension count `now`.
     void RefreshSnapshot(CommandList& list, u64 now);
     /// Copies the list's deferred entries (CommandList::deferred_entries) from memory.
