@@ -340,6 +340,22 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
             return;
         }
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::AcquireChecks, 1);
+        // The words Switch 2 syncs on only advance: a greater-or-equal acquire memory meets now
+        // is still met once the back ran what is queued, so the front need not wait for it
+        // (Ocarina of Time: ~120 acquires a frame, three in four of them this kind and met).
+        // EDEN_NX2_ACQ_MET_NO_DRAIN=0 drains for every acquire as before.
+        static const bool met_no_drain = [] {
+            const char* value = std::getenv("EDEN_NX2_ACQ_MET_NO_DRAIN");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (met_no_drain && op == GpuSemaphoreOperation::AcquireGequal &&
+            VideoCommon::GpuSplit::Get().Active() &&
+            acquire.Matches(dma_pusher.memory_manager.Read<u32>(acquire.address))) {
+            // What the front fetches next still waits for the work sent before the acquire where
+            // it depends on it (command lists on draw-written pages).
+            VideoCommon::GpuSplit::Get().NoteSync();
+            return;
+        }
         DrainBack(VideoCommon::DrainSite::AcquireTrigger);
         const u32 drained = ReadSemaphoreWord(dma_pusher, acquire.address);
         if (acquire.Matches(drained)) {
