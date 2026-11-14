@@ -37,12 +37,24 @@ public:
         static_assert(std::is_trivially_copyable_v<T>);
         const VAddr masked_address = address & RESERVATION_GRANULE_MASK;
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+        // No lock on arm64 hosts: the mark is published before the value is read, the value
+        // slot belongs to this processor alone, and the store that follows is a host
+        // compare-and-swap against the value read here (DoExclusiveOperation), which is what
+        // decides between racing processors. With the global lock, six cores running a game's
+        // job system spent close to half their time spinning on it.
+        __atomic_store_n(&exclusive_addresses[processor_id], masked_address, __ATOMIC_SEQ_CST);
+        const T value = op();
+        std::memcpy(exclusive_values[processor_id].data(), &value, sizeof(T));
+        return value;
+#else
         Lock();
         exclusive_addresses[processor_id] = masked_address;
         const T value = op();
         std::memcpy(exclusive_values[processor_id].data(), &value, sizeof(T));
         Unlock();
         return value;
+#endif
     }
 
     /// Checks to see if processor processor_id has exclusive access to the
@@ -52,6 +64,23 @@ public:
     template<typename T, typename Function>
         requires std::is_trivially_copyable_v<T>
     bool DoExclusiveOperation(size_t processor_id, VAddr address, Function op) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+        const VAddr masked_address = address & RESERVATION_GRANULE_MASK;
+        if (__atomic_load_n(&exclusive_addresses[processor_id], __ATOMIC_SEQ_CST) !=
+            masked_address) {
+            return false;
+        }
+        // Every processor's mark on this address goes, this one's included; a mark another
+        // processor moved on from meanwhile is left alone.
+        for (VAddr& other_address : exclusive_addresses) {
+            VAddr expected = masked_address;
+            __atomic_compare_exchange_n(&other_address, &expected, INVALID_EXCLUSIVE_ADDRESS,
+                                        false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+        }
+        T saved_value;
+        std::memcpy(&saved_value, exclusive_values[processor_id].data(), sizeof(T));
+        return op(saved_value);
+#else
         if (!CheckAndClear(processor_id, address)) {
             return false;
         }
@@ -62,6 +91,7 @@ public:
 
         Unlock();
         return result;
+#endif
     }
 
     /// Unmark everything.

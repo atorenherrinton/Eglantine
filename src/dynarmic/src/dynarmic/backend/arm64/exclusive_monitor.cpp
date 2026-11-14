@@ -47,15 +47,15 @@ bool ExclusiveMonitor::CheckAndClear(std::size_t processor_id, VAddr address) {
 }
 
 void ExclusiveMonitor::Clear() {
-    Lock();
-    std::fill(exclusive_addresses.begin(), exclusive_addresses.end(), INVALID_EXCLUSIVE_ADDRESS);
-    Unlock();
+    // Lock-free like ReadAndMark and DoExclusiveOperation (exclusive_monitor.h).
+    for (VAddr& address : exclusive_addresses) {
+        __atomic_store_n(&address, INVALID_EXCLUSIVE_ADDRESS, __ATOMIC_SEQ_CST);
+    }
 }
 
 void ExclusiveMonitor::ClearProcessor(std::size_t processor_id) {
-    Lock();
-    exclusive_addresses[processor_id] = INVALID_EXCLUSIVE_ADDRESS;
-    Unlock();
+    __atomic_store_n(&exclusive_addresses[processor_id], INVALID_EXCLUSIVE_ADDRESS,
+                     __ATOMIC_SEQ_CST);
 }
 
 }  // namespace Dynarmic
