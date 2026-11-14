@@ -224,12 +224,8 @@ bool DmaPusher::Step() {
         bool gpu_written =
             !gpu_record &&
             IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
-        // Pages no GPU work has written yet may still get the list from compute or copy work
-        // queued before it. The GPU fetches the list after that work only past a host-level wait
-        // (NoteSync): later work is not ordered before the fetch, and the list does not wait for
-        // it (nor for draws, which write memory too; draw-written lists wait for the last sync).
         if (!gpu_record && !gpu_written && VideoCommon::GpuSplit::Get().Active() &&
-            VideoCommon::GpuSplit::Get().WaitForSyncedWriters()) {
+            VideoCommon::GpuSplit::Get().WaitForWriters()) {
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
         }
