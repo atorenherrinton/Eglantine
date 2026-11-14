@@ -568,6 +568,29 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
     });
 }
 
+VkBuffer BufferCacheRuntime::Nx2MeshArguments() {
+    if (!nx2_mesh_arguments) {
+        const VkBufferCreateInfo create_info{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .size = Nx2MeshSlotBytes * Nx2MeshSlots,
+            .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+        };
+        nx2_mesh_arguments = memory_allocator.CreateBuffer(create_info, MemoryUsage::Upload);
+        // The copies only ever write the first word of an argument: y and z stay 1.
+        const std::span<u8> mapped = nx2_mesh_arguments.Mapped();
+        static constexpr std::array<u32, 3> EMPTY{0, 1, 1};
+        for (size_t offset = 0; offset + sizeof(EMPTY) <= mapped.size(); offset += sizeof(EMPTY)) {
+            std::memcpy(mapped.data() + offset, EMPTY.data(), sizeof(EMPTY));
+        }
+    }
+    return *nx2_mesh_arguments;
+}
+
 void BufferCacheRuntime::PreCopyBarrier() {
     static constexpr VkMemoryBarrier READ_BARRIER{
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,

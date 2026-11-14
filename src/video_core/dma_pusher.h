@@ -220,6 +220,9 @@ public:
     void RecordParsedEntry(const CommandListHeader& header, std::span<const CommandHeader> commands);
     /// Whether the entry lies on device pages the GPU has written (NX2).
     bool IsGpuWrittenCommands(GPUVAddr address, size_t size);
+    /// Whether the entry is a macro call's parameter record on GPU-written pages that the
+    /// split's back handles without the front reading it; fills `words` with placeholders.
+    bool TakeGpuRecord(const CommandListHeader& header, std::array<CommandHeader, 3>& words);
     /// Copies the list's words from memory again, as of suspension count `now`.
     void RefreshSnapshot(CommandList& list, u64 now);
     /// Copies the list's deferred entries (CommandList::deferred_entries) from memory.

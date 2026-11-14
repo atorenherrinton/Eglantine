@@ -2584,6 +2584,14 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             buffer.MarkUsage(copy.src_offset, copy.size);
             runtime.CopyBuffer(staging.buffer, buffer, std::span{&copy, 1}, true);
             recorded = true;
+            if (const auto mesh = nx2_mesh_pages.find(page); mesh != nx2_mesh_pages.end()) {
+                {
+                    std::scoped_lock lock{nx2_list_mutex};
+                    mesh->second.writes = nx2_list_pages[page].writes;
+                }
+                mesh->second.ready.reset();
+                Nx2ExpandMeshPage(buffer, page, mesh->second);
+            }
             std::scoped_lock lock{nx2_list_mutex};
             Nx2ListPage& entry = nx2_list_pages[page];
             if (entry.copy) {
@@ -2605,6 +2613,90 @@ bool BufferCache<P>::Nx2CopyListPages(u64 tick) {
             return true;
         });
         return recorded;
+    }
+}
+
+template <class P>
+void BufferCache<P>::Nx2ExpandMeshPage(Buffer& buffer, DAddr page, Nx2MeshPage& entry) {
+    if constexpr (!IS_OPENGL) {
+        boost::container::small_vector<BufferCopy, 32> copies;
+        const DAddr buffer_end = buffer.CpuAddr() + buffer.SizeBytes();
+        for (const u16 word : nx2_mesh_words) {
+            const DAddr address = page + u64{word} * 4;
+            if (address < buffer.CpuAddr() || address + 4 > buffer_end) {
+                continue;
+            }
+            copies.push_back(BufferCopy{
+                .src_offset = buffer.Offset(address),
+                .dst_offset = u64{entry.slot} * Runtime::Nx2MeshSlotBytes + u64{word} * 12,
+                .size = 4,
+            });
+            entry.ready.set(word);
+        }
+        if (copies.empty()) {
+            return;
+        }
+        const DAddr begin = (std::max<DAddr>)(page, buffer.CpuAddr());
+        const DAddr end = (std::min<DAddr>)(page + 0x1000, buffer_end);
+        SynchronizeBuffer(buffer, begin, static_cast<u32>(end - begin));
+        buffer.MarkUsage(buffer.Offset(begin), end - begin);
+        runtime.CopyBuffer(runtime.Nx2MeshArguments(), buffer.Handle(), copies, true, false);
+    }
+}
+
+template <class P>
+std::optional<u64> BufferCache<P>::Nx2MeshTaskArguments(DAddr record) {
+    if constexpr (IS_OPENGL) {
+        return std::nullopt;
+    } else {
+        const DAddr page = record & ~DAddr{0xfff};
+        const u32 offset = static_cast<u32>(record & 0xfff);
+        if ((offset & 3) != 0 || offset + 8 > 0x1000) {
+            return std::nullopt;
+        }
+        const u64 page_index = page >> CACHING_PAGEBITS;
+        if (page_index >= page_table.size()) {
+            return std::nullopt;
+        }
+        const BufferId buffer_id = page_table[page_index];
+        if (!buffer_id) {
+            return std::nullopt;
+        }
+        Buffer& buffer = slot_buffers[buffer_id];
+        if (record < buffer.CpuAddr() || record + 8 > buffer.CpuAddr() + buffer.SizeBytes()) {
+            return std::nullopt;
+        }
+        const u16 word = static_cast<u16>(offset / 4);
+        if (const auto it = std::ranges::lower_bound(nx2_mesh_words, word);
+            it == nx2_mesh_words.end() || *it != word) {
+            nx2_mesh_words.insert(it, word);
+        }
+        auto it = nx2_mesh_pages.find(page);
+        if (it == nx2_mesh_pages.end()) {
+            if (nx2_mesh_next_slot == Runtime::Nx2MeshSlots) {
+                // Draws already recorded read their arguments before later copies reuse them.
+                nx2_mesh_pages.clear();
+                nx2_mesh_next_slot = 0;
+            }
+            it = nx2_mesh_pages.emplace(page, Nx2MeshPage{.slot = nx2_mesh_next_slot++}).first;
+        }
+        Nx2MeshPage& entry = it->second;
+        u64 writes;
+        {
+            std::scoped_lock lock{nx2_list_mutex};
+            writes = nx2_list_pages[page].writes;
+        }
+        if (entry.writes != writes) {
+            entry.writes = writes;
+            entry.ready.reset();
+        }
+        if (!entry.ready.test(word)) {
+            Nx2ExpandMeshPage(buffer, page, entry);
+            if (!entry.ready.test(word)) {
+                return std::nullopt;
+            }
+        }
+        return u64{entry.slot} * Runtime::Nx2MeshSlotBytes + u64{word} * 12;
     }
 }
 

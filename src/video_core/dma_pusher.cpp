@@ -218,9 +218,13 @@ bool DmaPusher::Step() {
         // written by a dispatch or copy still queued for it reads as unwritten, and its words as
         // stale (Fast Fusion's culling fills in instanced draws' arguments; stale ones asked for
         // billions of instances and lost the device loading a race).
+        // A culling pass's draw and dispatch sizes: the host GPU reads them, nobody waits.
+        std::array<CommandHeader, 3> record_words{};
+        const bool gpu_record = command_resume_offset == 0 && TakeGpuRecord(header, record_words);
         bool gpu_written =
+            !gpu_record &&
             IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
-        if (!gpu_written && VideoCommon::GpuSplit::Get().Active() &&
+        if (!gpu_record && !gpu_written && VideoCommon::GpuSplit::Get().Active() &&
             VideoCommon::GpuSplit::Get().WaitForWriters()) {
             gpu_written =
                 IsGpuWrittenCommands(dma_state.dma_get, size_t{header.size} * sizeof(u32));
@@ -237,7 +241,7 @@ bool DmaPusher::Step() {
                                !std::ranges::binary_search(
                                    command_list.deferred_entries,
                                    static_cast<u32>(dma_pushbuffer_subindex)) &&
-                               !gpu_written &&
+                               !gpu_written && !gpu_record &&
                                !(use_safe && memory_manager.IsMemoryDirty(dma_state.dma_get,
                                                                           header.size * sizeof(u32)));
         // Off by default: the check below reads memory and allocates for each entry it checks.
@@ -295,7 +299,11 @@ bool DmaPusher::Step() {
                 }
             }
         }
-        if (submitted) {
+        if (gpu_record) {
+            const std::span<const CommandHeader> commands{record_words.data(), header.size};
+            RecordParsedEntry(header, commands);
+            command_resume_offset += ProcessCommands(commands, 0);
+        } else if (submitted) {
             const std::span<const CommandHeader> commands{
                 command_list.submitted_words.data() +
                     command_list.submitted_offsets[dma_pushbuffer_subindex],
@@ -789,6 +797,55 @@ void DmaPusher::RefreshDeferredEntries(CommandList& list) {
                                        entry.size * sizeof(u32));
     }
     list.deferred_entries.clear();
+}
+
+bool DmaPusher::TakeGpuRecord(const CommandListHeader& header,
+                              std::array<CommandHeader, 3>& words) {
+    // EDEN_NX2_GPU_RECORDS=0: read the records on the CPU as before.
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_GPU_RECORDS");
+        return value == nullptr || value[0] != '0';
+    }();
+    auto& split = VideoCommon::GpuSplit::Get();
+    if (!enabled || !g_nx2_ampere.load(std::memory_order_relaxed) || !split.Active()) {
+        return false;
+    }
+    // A macro call whose parameters are this entry, all of them.
+    if (dma_state.method < MacroRegistersStart || (dma_state.method & 1) != 0 ||
+        dma_state.non_incrementing || dma_state.method_count != header.size) {
+        return false;
+    }
+    auto* const engine = subchannels[dma_state.subchannel];
+    if (engine == nullptr) {
+        return false;
+    }
+    // Dispatch sizes are three words (x, y, z), a mesh draw's two (tasks, first task).
+    const auto type = subchannel_type[dma_state.subchannel];
+    const bool dispatch = type == Engines::EngineTypes::KeplerCompute && header.size == 3;
+    const bool mesh_draw = type == Engines::EngineTypes::Maxwell3D && header.size == 2;
+    if (!dispatch && !mesh_draw) {
+        return false;
+    }
+    const GPUVAddr address = dma_state.dma_get;
+    const size_t bytes = size_t{header.size} * sizeof(u32);
+    if ((address & 0xfff) + bytes > 0x1000 || !IsGpuWrittenCommands(address, bytes)) {
+        return false;
+    }
+    split.Defer([engine, address] { engine->gpu_record = address; },
+                VideoCommon::GpuSplit::Effect::None);
+    if (mesh_draw) {
+        // The buffer cache then tells the back when GPU work rewrites the page.
+        if (const auto device = memory_manager.GpuToCpuAddress(address)) {
+            Tegra::Nx2MarkCommandListPage(*device);
+        }
+        words[0].argument = 1; // tasks: not an empty draw
+        words[1].argument = 0;
+        return true;
+    }
+    for (size_t i = 0; i < header.size; ++i) {
+        words[i].argument = Engines::GpuRecordDispatchSize[i];
+    }
+    return true;
 }
 
 bool DmaPusher::IsGpuWrittenCommands(GPUVAddr address, size_t size) {

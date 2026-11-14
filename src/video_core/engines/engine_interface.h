@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <array>
 #include <bitset>
 #include <limits>
 #include <vector>
@@ -26,6 +27,9 @@ enum class EngineTypes : u32 {
     MaxwellDMA,
     KeplerMemory,
 };
+
+/// Placeholder group counts of a compute dispatch whose real ones are a GPU-written record.
+inline constexpr std::array<u32, 3> GpuRecordDispatchSize{0x7e57d150, 0xd151, 0xd152};
 
 class EngineInterface {
 public:
@@ -53,6 +57,10 @@ public:
     bool fast_maxwell3d{};
     std::vector<std::pair<u32, u32>> method_sink{};
     GPUVAddr current_dma_segment;
+    /// Switch 2: the next macro call's parameters are placeholders; the real ones are the words
+    /// GPU work writes at this address (DmaPusher::TakeGpuRecord). The engine has the host GPU
+    /// read them where it can and reads them back itself where it can't.
+    GPUVAddr gpu_record{};
     bool current_dirty{};
 protected:
     virtual void ConsumeSinkImpl(Core::System& system) {

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -449,6 +450,18 @@ private:
     };
     std::vector<UploadInfo> uploads;
     std::optional<GPUVAddr> indirect_compute{};
+    /// Switch 2: where GPU work writes the group counts of the dispatches whose descriptor
+    /// holds GpuRecordDispatchSize (EngineInterface::gpu_record).
+    GPUVAddr native_gpu_dispatch_size{};
+    /// The inline upload in progress: words seen, placeholder words matched and where the
+    /// placeholder starts in it (-1: nowhere).
+    u32 native_upload_words{};
+    u32 native_upload_match{};
+    s64 native_upload_placeholder{-1};
+    /// Whether the macro at `start` only stores its three parameters in the data RAM.
+    bool IsDispatchSizeMacro(u32 start);
+    std::unordered_map<u64, bool> dispatch_size_macros;
+    u64 dispatch_size_macros_generation{~u64{0}};
 };
 
 #define ASSERT_REG_POSITION(field_name, position)                                                  \

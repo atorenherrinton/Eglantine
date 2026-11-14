@@ -457,9 +457,114 @@ void Maxwell3D::CallMacroMethod(Core::System& system, u32 method, std::span<cons
     const u32 entry =
         ((method - MacroRegistersStart) >> 1) % static_cast<u32>(GetNativeMacroPositions().size());
 
+    if (const GPUVAddr record = std::exchange(gpu_record, GPUVAddr{}); record != 0) [[unlikely]] {
+        CallGpuRecordMacro(system, GetNativeMacroPositions()[entry], parameters, record);
+        draw_manager.DrawDeferred(*this);
+        return;
+    }
+
     // Execute the current macro.
     GetNativeMacroEngine().Execute(system, *this, GetNativeMacroPositions()[entry], parameters);
     draw_manager.DrawDeferred(*this);
+}
+
+const Maxwell3D::GpuRecordDraw& Maxwell3D::ClassifyGpuRecordDraw(u32 start) {
+    auto& engine = GetNativeMacroEngine();
+    if (gpu_record_draws_generation != engine.native_code_generation) {
+        gpu_record_draws_generation = engine.native_code_generation;
+        gpu_record_draws.clear();
+    }
+    const auto [it, inserted] = gpu_record_draws.try_emplace(start);
+    GpuRecordDraw& draw = it->second;
+    if (!inserted) {
+        return draw;
+    }
+    // Two dry runs on a copy of the data RAM: the macro must write the same four methods
+    // whatever its two parameters are, read nothing else, and end with the draw.
+    using Writes = boost::container::small_vector<std::pair<u32, u32>, 8>;
+    const auto run = [&](const std::array<u32, 2>& parameters, Writes& writes) {
+        if (!engine.native_turing) {
+            return false;
+        }
+        auto probe = std::make_unique<TuringMacroInterpreter>();
+        probe->dram = GetNativeDataRam();
+        std::vector<u32> fifo(parameters.begin(), parameters.end());
+        const auto result = probe->Execute(
+            engine.native_code, start, fifo,
+            [&](u32 address) { return address < Regs::NUM_REGS ? GetRegisterValue(address) : 0U; },
+            [&](u32 address, u32 value) {
+                writes.emplace_back(address, value);
+                return address < MacroRegistersStart;
+            });
+        return result.success && result.consumed == 2 && !probe->read_registers &&
+               probe->data_ram_reads.empty() && probe->data_ram_writes.empty();
+    };
+    static constexpr std::array<std::array<u32, 2>, 2> Probes{{{0x1357911, 0x2468ace},
+                                                               {0x0badf00, 0x0c0ffee}}};
+    std::array<Writes, 2> writes;
+    bool eligible = run(Probes[0], writes[0]) && run(Probes[1], writes[1]) &&
+                    writes[0].size() == draw.writes.size() &&
+                    writes[1].size() == draw.writes.size();
+    bool has_count = false;
+    for (size_t i = 0; eligible && i < draw.writes.size(); ++i) {
+        const auto [address, value] = writes[0][i];
+        const auto [other_address, other_value] = writes[1][i];
+        eligible = address == other_address;
+        draw.writes[i] = {address, value};
+        if (value == other_value) {
+            draw.source[i] = 0;
+        } else if (value == Probes[0][0] && other_value == Probes[1][0]) {
+            draw.source[i] = 1;
+            has_count |= address == MAXWELL3D_REG_INDEX(vertex_buffer.count);
+        } else if (value == Probes[0][1] && other_value == Probes[1][1]) {
+            draw.source[i] = 2;
+        } else {
+            eligible = false;
+        }
+    }
+    draw.eligible = eligible && has_count && draw.source[3] == 0 &&
+                    draw.writes[3].first == MAXWELL3D_REG_INDEX(draw.end);
+    LOG_INFO(HW_GPU, "3D macro {:#x} {} a draw of a GPU-written task count", start,
+             draw.eligible ? "is" : "is not");
+    return draw;
+}
+
+void Maxwell3D::CallGpuRecordMacro(Core::System& system, u32 start,
+                                   std::span<const u32> parameters, GPUVAddr record) {
+    // The parameters are placeholders for the words GPU work writes at `record`
+    // (DmaPusher::TakeGpuRecord): a culling pass's count for a task/mesh draw.
+    const auto read_record = [&](std::span<u32> words) {
+        memory_manager.FlushRegion(record, words.size_bytes());
+        memory_manager.ReadBlockUnsafe(record, words.data(), words.size_bytes());
+    };
+    const GpuRecordDraw& draw = ClassifyGpuRecordDraw(start);
+    if (parameters.size() != 2 || !draw.eligible) {
+        std::array<u32, 64> words{};
+        const std::span<u32> real{words.data(), (std::min)(parameters.size(), words.size())};
+        read_record(real);
+        GetNativeMacroEngine().Execute(system, *this, start, real);
+        return;
+    }
+    const auto write = [&](size_t index, std::span<const u32> values) {
+        const u32 value = draw.source[index] == 0 ? draw.writes[index].second
+                                                  : values[draw.source[index] - 1];
+        CallMethod(system, draw.writes[index].first, value, true);
+    };
+    for (size_t index = 0; index < 3; ++index) {
+        write(index, parameters);
+    }
+    // The pipeline is known now: the host draws from the record when it is a task/mesh one.
+    if (!rasterizer->SetMeshTasksRecord(record)) {
+        std::array<u32, 2> real{};
+        read_record(real);
+        for (size_t index = 0; index < 3; ++index) {
+            if (draw.source[index] != 0) {
+                write(index, real);
+            }
+        }
+    }
+    write(3, parameters);
+    rasterizer->SetMeshTasksRecord(0);
 }
 
 void Maxwell3D::TraceFirstMethodWrite(u32 method, u32 argument) {

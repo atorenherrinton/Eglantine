@@ -93,6 +93,7 @@ public:
     ~RasterizerVulkan() override;
 
     void Draw(bool is_indexed, u32 instance_count) override;
+    bool SetMeshTasksRecord(GPUVAddr record) override;
     void DrawIndirect() override;
     void DrawTexture() override;
     void Clear(u32 layer_count) override;
@@ -295,6 +296,8 @@ private:
     u32 submit_waited_draws{64};
     u32 submit_idle_draws{128};
     bool mesh_draw{}; ///< the draw being prepared uses a task/mesh pipeline
+    /// The next task/mesh draw's arguments in the buffer cache's mesh argument buffer.
+    std::optional<u64> mesh_tasks_record;
     /// Fragment output components the dynamic color write mask was last recorded with
     u32 last_color_output_mask{};
 

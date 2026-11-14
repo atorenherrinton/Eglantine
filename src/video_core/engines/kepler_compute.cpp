@@ -194,6 +194,16 @@ bool KeplerCompute::ProcessNativeMethod(Core::System& system, u32 method, u32 ar
                      fmt::join(native_parameters, ","));
         }
         if (native_data_ram) native_macro->native_interpreter.active_dram = native_data_ram;
+        if (const GPUVAddr record = std::exchange(gpu_record, GPUVAddr{}); record != 0) {
+            if (native_parameters.size() == 3 && IsDispatchSizeMacro(native_macro_positions[entry])) {
+                native_gpu_dispatch_size = record;
+            } else {
+                // Some other macro: it needs the words themselves.
+                memory_manager.FlushRegion(record, native_parameters.size() * sizeof(u32));
+                memory_manager.ReadBlockUnsafe(record, native_parameters.data(),
+                                               native_parameters.size() * sizeof(u32));
+            }
+        }
         const u32 dram0_before = (*native_macro->native_interpreter.active_dram)[0x27];
         const u32 start = native_macro_positions[entry];
         const auto emit = [&](u32 address, u32 value) {
@@ -521,7 +531,39 @@ void KeplerCompute::CallMethod(Core::System& system, u32 method, u32 method_argu
         upload_address = current_dma_segment;
         upload_dirty = current_dirty;
         current_dirty = false;
+        if (native_mode && native_gpu_dispatch_size != 0) {
+            // The driver also uploads the group counts for the program to read.
+            if (method_argument == GpuRecordDispatchSize[native_upload_match]) {
+                if (++native_upload_match == 3) {
+                    native_upload_placeholder = (s64{native_upload_words} - 2) * 4;
+                    native_upload_match = 0;
+                }
+            } else {
+                native_upload_match = method_argument == GpuRecordDispatchSize[0] ? 1 : 0;
+            }
+            ++native_upload_words;
+        }
         upload_state.ProcessData(method_argument, is_last_call);
+        if (is_last_call) {
+            if (native_upload_placeholder >= 0) {
+                const GPUVAddr target = upload_state.ExecTargetAddress() +
+                                        static_cast<u64>(native_upload_placeholder);
+                if (!rasterizer->AccessAccelerateDMA().BufferCopy(native_gpu_dispatch_size, target,
+                                                                  12)) {
+                    std::array<u32, 3> size{};
+                    memory_manager.FlushRegion(native_gpu_dispatch_size, sizeof(size));
+                    memory_manager.ReadBlockUnsafe(native_gpu_dispatch_size, size.data(),
+                                                   sizeof(size));
+                    memory_manager.WriteBlockUnsafe(target, size.data(), sizeof(size));
+                    rasterizer->AccelerateInlineToMemory(
+                        target, sizeof(size),
+                        std::span{reinterpret_cast<const u8*>(size.data()), sizeof(size)});
+                }
+            }
+            native_upload_words = 0;
+            native_upload_match = 0;
+            native_upload_placeholder = -1;
+        }
         break;
     }
     case KEPLER_COMPUTE_REG_INDEX(launch): {
@@ -579,7 +621,46 @@ void KeplerCompute::CallMultiMethod(Core::System& system, u32 method, const u32*
     }
 }
 
+bool KeplerCompute::IsDispatchSizeMacro(u32 start) {
+    if (dispatch_size_macros_generation != native_macro->native_code_generation) {
+        dispatch_size_macros_generation = native_macro->native_code_generation;
+        dispatch_size_macros.clear();
+    }
+    const u64 key = (u64{reinterpret_cast<uintptr_t>(native_macro)} << 16) ^ start;
+    if (const auto it = dispatch_size_macros.find(key); it != dispatch_size_macros.end()) {
+        return it->second;
+    }
+    // A dry run on a copy of the data RAM: no method writes, and the three words stored as
+    // they came.
+    auto probe = std::make_unique<TuringMacroInterpreter>();
+    probe->dram = *native_macro->native_interpreter.active_dram;
+    std::vector<u32> fifo(GpuRecordDispatchSize.begin(), GpuRecordDispatchSize.end());
+    bool wrote = false;
+    const auto result = probe->Execute(
+        native_macro->native_code, start, fifo,
+        [&](u32 address) { return address < native_registers.size() ? native_registers[address] : 0U; },
+        [&](u32, u32) {
+            wrote = true;
+            return true;
+        });
+    bool stores = result.success && !wrote && result.consumed == 3 &&
+                  probe->data_ram_writes.size() == 3;
+    for (size_t i = 0; stores && i < 3; ++i) {
+        stores = probe->data_ram_writes[i].second == GpuRecordDispatchSize[i];
+    }
+    LOG_INFO(HW_GPU, "Compute macro {:#x} {} a dispatch size macro", start, stores ? "is" : "is not");
+    dispatch_size_macros.emplace(key, stores);
+    return stores;
+}
+
 bool KeplerCompute::DispatchNativeCompute(const NativeQmdScheduler::Descriptor& qmd) {
+    // Group counts GPU work writes: the host GPU dispatches from that record.
+    indirect_compute = std::nullopt;
+    if (native_gpu_dispatch_size != 0 && qmd[12] == GpuRecordDispatchSize[0] &&
+        (qmd[13] & 0xffff) == GpuRecordDispatchSize[1] &&
+        (qmd[14] & 0xffff) == GpuRecordDispatchSize[2]) {
+        indirect_compute = native_gpu_dispatch_size;
+    }
     launch_description = {};
     launch_description.grid_dim_x.Assign(qmd[12]);
     launch_description.grid_dim_y.Assign(qmd[13] & 0xffff);

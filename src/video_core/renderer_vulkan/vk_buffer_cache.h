@@ -155,6 +155,12 @@ public:
 
     void PostCopyBarrier();
 
+    /// Mesh draw arguments (group counts x, 1, 1) the GPU fills in from guest records
+    /// (BufferCache::Nx2MeshTaskArguments): one per word of a guest page, Nx2MeshSlots pages.
+    static constexpr u64 Nx2MeshSlotBytes = 1024 * 12;
+    static constexpr u32 Nx2MeshSlots = 1024;
+    [[nodiscard]] VkBuffer Nx2MeshArguments();
+
     void ClearBuffer(VkBuffer dest_buffer, u32 offset, size_t size, u32 value);
 
     void BindIndexBuffer(PrimitiveTopology topology, IndexFormat index_format, u32 num_indices,
@@ -326,6 +332,7 @@ private:
     std::shared_ptr<QuadStripIndexBuffer> quad_strip_index_buffer;
 
     vk::Buffer null_buffer;
+    vk::Buffer nx2_mesh_arguments;
 
     std::unique_ptr<Uint8Pass> uint8_pass;
     std::unique_ptr<VertexRepackPass> vertex_repack_pass;

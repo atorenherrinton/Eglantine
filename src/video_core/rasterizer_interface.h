@@ -53,6 +53,13 @@ public:
     /// Dispatches an indirect draw invocation
     virtual void DrawIndirect() {}
 
+    /// Switch 2: the next draw is a task/mesh draw whose task count GPU work writes at `record`
+    /// (0: no longer). False when the host can't draw it from there: the caller then reads the
+    /// record itself.
+    virtual bool SetMeshTasksRecord([[maybe_unused]] GPUVAddr record) {
+        return false;
+    }
+
     /// Dispatches an draw texture invocation
     virtual void DrawTexture() = 0;
 

@@ -1244,6 +1244,26 @@ void TraceWindowTarget(const Tegra::Engines::Maxwell3D& maxwell3d, Tegra::Memory
 }
 } // Anonymous namespace
 
+bool RasterizerVulkan::SetMeshTasksRecord(GPUVAddr record) {
+    mesh_tasks_record.reset();
+    if (record == 0 || !device.IsExtMeshShaderSupported()) {
+        return false;
+    }
+    FlushWork();
+    gpu_memory->FlushCaching();
+    GraphicsPipeline* const pipeline{pipeline_cache.CurrentGraphicsPipeline(false)};
+    if (!pipeline || !pipeline->IsMeshPipeline() || pipeline->IsEmulatedMesh()) {
+        return false;
+    }
+    const auto device_addr = gpu_memory->GpuToCpuAddress(record);
+    if (!device_addr) {
+        return false;
+    }
+    std::scoped_lock lock{buffer_cache.mutex};
+    mesh_tasks_record = buffer_cache.Nx2MeshTaskArguments(*device_addr);
+    return mesh_tasks_record.has_value();
+}
+
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Draw};
     {
@@ -1421,6 +1441,16 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
                     return;
                 }
                 cmdbuf.Draw(vertices, 1, 0, 0);
+            });
+            return;
+        }
+        if (mesh_draw && mesh_tasks_record) {
+            scheduler.Record([this, arguments = buffer_cache_runtime.Nx2MeshArguments(),
+                              offset = *mesh_tasks_record](vk::CommandBuffer cmdbuf) {
+                if (scheduler.GraphicsPipelineMissing()) {
+                    return;
+                }
+                cmdbuf.DrawMeshTasksIndirectEXT(arguments, offset, 1, 12);
             });
             return;
         }

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <bit>
 #include <cstdlib>
 #include <functional>
@@ -487,6 +488,11 @@ public:
     Nx2ListRead Nx2ReadListCopy(DAddr device_addr, std::span<u8> out, bool past_sync);
     /// Front thread, the split drained: the command list page was flushed to guest memory.
     void Nx2NoteListSynced(DAddr page);
+
+    /// Where the runtime's mesh argument buffer holds (x, 1, 1) for the task count GPU work
+    /// writes at `record` (a mesh draw's indirect record), copying it there on the GPU if the
+    /// page's last expansion missed it. Nothing when no buffer holds the record.
+    [[nodiscard]] std::optional<u64> Nx2MeshTaskArguments(DAddr record);
     /// CPU and inline writes: they reach guest memory, so a synced page stays synced, but its copy
     /// no longer holds the page unless updated in place.
     void Nx2NoteListHostWrite(DAddr device_addr, u64 size, std::span<const u8> data = {});
@@ -1041,6 +1047,18 @@ private:
     std::vector<std::pair<u64, Nx2Staging>> nx2_retired_list_copies;
     boost::container::small_vector<std::pair<BufferId, DAddr>, 8> nx2_list_copy_requests;
     bool nx2_collect_list_copies{};
+    struct Nx2MeshPage {
+        u32 slot{};
+        u64 writes{~u64{0}}; ///< Nx2ListPage::writes when the words below were copied
+        std::bitset<1024> ready; ///< Words of the page whose argument is current
+    };
+    /// Copies the page's known record words into its slot of the mesh argument buffer.
+    void Nx2ExpandMeshPage(Buffer& buffer, DAddr page, Nx2MeshPage& entry);
+    std::unordered_map<DAddr, Nx2MeshPage> nx2_mesh_pages;
+    /// Page offsets (in words) mesh records have been at: pages are expanded for all of them
+    /// right after the dispatch that writes them, outside any render pass.
+    std::vector<u16> nx2_mesh_words;
+    u32 nx2_mesh_next_slot{};
     int nx2_graphics_stage{-1};
 };
 

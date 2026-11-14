@@ -3183,6 +3183,19 @@ public:
     void SetNativeMacroContext(std::shared_ptr<NativeMacroContext> context) {
         native_macro_context = std::move(context);
     }
+    /// A macro that draws with a count from its first parameter (ClassifyGpuRecordDraw).
+    struct GpuRecordDraw {
+        bool eligible{};
+        std::array<std::pair<u32, u32>, 4> writes{}; ///< Method and value
+        std::array<u8, 4> source{};                   ///< 0 the value, else that parameter + 1
+    };
+    const GpuRecordDraw& ClassifyGpuRecordDraw(u32 start);
+    /// Runs a macro whose parameters are GPU-written words (EngineInterface::gpu_record).
+    void CallGpuRecordMacro(Core::System& system, u32 start, std::span<const u32> parameters,
+                            GPUVAddr record);
+    std::unordered_map<u32, GpuRecordDraw> gpu_record_draws;
+    u64 gpu_record_draws_generation{~u64{0}};
+
     MacroEngine& GetNativeMacroEngine() { return native_macro_context ? native_macro_context->engine : macro_engine; }
     /// This channel's MME data RAM (shared with its compute engine).
     std::array<u32, 0xc00>& GetNativeDataRam() { return native_data_ram; }
