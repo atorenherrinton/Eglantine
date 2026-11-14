@@ -858,6 +858,10 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         if (!view_span.empty()) {
             texture_cache.CheckFeedbackLoop(view_span);
         }
+        if ((regs.depth_test_enable != 0 && regs.depth_write_enabled != 0) ||
+            regs.stencil_enable != 0) {
+            scheduler.NoteDepthStencilWrite();
+        }
         if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() ||
              (!view_span.empty() && texture_cache.SamplesRenderTarget(view_span)))) {

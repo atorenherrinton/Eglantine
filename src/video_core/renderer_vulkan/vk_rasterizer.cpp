@@ -1784,6 +1784,7 @@ void RasterizerVulkan::Clear(u32 layer_count) {
         ds_value.depthStencil.stencil = regs.clear_stencil;
         scheduler.DeferDepthStencilClear(framebuffer, ds_value);
     } else {
+        scheduler.NoteDepthStencilWrite();
         scheduler.Record([clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
                           clear_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
             VkClearAttachment attachment;

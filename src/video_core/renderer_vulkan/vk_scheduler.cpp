@@ -209,6 +209,7 @@ void Scheduler::BeginRenderPassImpl(const Framebuffer* framebuffer, VkRenderPass
     state.renderpass = framebuffer->RenderPass();
     state.framebuffer = framebuffer_handle;
     state.render_area = render_area;
+    depth_stencil_written = clear_value_count != 0;
 
     if (GPU::Logging::IsActive() && Settings::values.gpu_log_vulkan_calls.GetValue()) {
         const std::string render_pass_info =

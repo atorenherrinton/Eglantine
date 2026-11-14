@@ -1404,6 +1404,13 @@ void TextureCacheRuntime::EraseResolveShadow(VkImage msaa_image) {
 }
 
 void TextureCacheRuntime::BarrierFeedbackLoop() {
+    // The barrier is for draws that sample the depth target they are bound to. While nothing in
+    // this render pass has written depth or stencil, the image holds what the draw should see:
+    // ending the pass costs a store and a load of every attachment (tile-based GPUs: Ocarina of
+    // Time ended ~95 full-size passes a frame here for draws that only test depth).
+    if (!scheduler.DepthStencilWritten()) {
+        return;
+    }
     scheduler.RequestOutsideRenderPassOperationContext();
 }
 

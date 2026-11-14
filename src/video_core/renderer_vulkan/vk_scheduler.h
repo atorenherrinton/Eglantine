@@ -120,6 +120,16 @@ public:
         return fragment_barrier.Pending();
     }
 
+    /// A draw or clear in the current render pass may have written depth or stencil.
+    void NoteDepthStencilWrite() {
+        depth_stencil_written = true;
+    }
+
+    /// False while the depth attachment still holds what it did when the render pass began.
+    bool DepthStencilWritten() const {
+        return depth_stencil_written || !state.renderpass || deferred_clear.framebuffer != nullptr;
+    }
+
     void NoteRenderPassStores() {
         render_pass_has_stores = true;
     }
@@ -436,6 +446,7 @@ private:
     std::unique_ptr<MasterSemaphore> master_semaphore;
     FragmentBarrierState fragment_barrier;
     bool render_pass_has_stores{};
+    bool depth_stencil_written{};
     bool compute_writes_pending{};
     bool graphics_pipeline_missing{};
     std::unique_ptr<CommandPool> command_pool;
